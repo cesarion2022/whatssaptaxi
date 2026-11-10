@@ -1,0 +1,310 @@
+<script>
+  /* ========== CONFIGURACIÓN ========== */
+  const WHATSAPP_NUMBER = "573165275176";
+  const TARIFA_MINIMA = 6600;
+  const BANDERAZO = 4500;
+  const CAIDA_POR_80M = 105;
+  const RECARGO_PLATAFORMA = 800;
+  const IBAGUE_CENTER = [4.4389, -75.2322];
+
+  let userLocation = null;
+  let ultimaDistanciaMetros = null;
+  let ultimaDuracionSegundos = null;
+  let ultimaTarifa = null;
+  let map = null;
+  let routeLayer = null;
+  let markerOrigen = null;
+  let markerDestino = null;
+
+  /* ========== MAPA (fuente de teselas corregida) ========== */
+  function initMap() {
+    // Si ya existe un mapa, destruirlo primero para evitar el error "Map container is already initialized"
+    if (map) {
+      map.remove();
+      map = null;
+    }
+
+    map = L.map('map').setView(IBAGUE_CENTER, 13);
+
+    // ✅ Usar servidor espejo de OSM (más tolerante que tile.openstreetmap.org)
+    // Si sigue fallando, se puede reemplazar por: https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png
+    L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Escuchar errores de carga de teselas
+    map.on('tileerror', function() {
+      console.warn('Error al cargar teselas del mapa');
+    });
+  }
+
+  function limpiarRuta() {
+    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    if (markerOrigen) { map.removeLayer(markerOrigen); markerOrigen = null; }
+    if (markerDestino) { map.removeLayer(markerDestino); markerDestino = null; }
+  }
+
+  function dibujarRuta(coords, origenCoord, destinoCoord) {
+    limpiarRuta();
+
+    routeLayer = L.polyline(coords, {
+      color: '#25D366', weight: 6, opacity: 0.85
+    }).addTo(map);
+
+    markerOrigen = L.marker(origenCoord).addTo(map).bindPopup('Origen');
+    markerDestino = L.marker(destinoCoord).addTo(map).bindPopup('Destino');
+
+    map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+  }
+
+  /* ========== GEOCODIFICACIÓN ========== */
+  async function geocodificar(direccion) {
+    const query = encodeURIComponent(direccion + ", Ibagué, Colombia");
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${query}`;
+
+    const res = await fetch(url, {
+      headers: { 'Accept-Language': 'es' }
+    });
+    if (!res.ok) throw new Error('Error al buscar dirección');
+    const data = await res.json();
+    if (!data || data.length === 0) throw new Error('Dirección no encontrada');
+    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+  }
+
+  /* ========== CÁLCULO DE RUTA OSRM ========== */
+  async function calcularRutaOSRM(origenCoord, destinoCoord) {
+    const url = `https://router.project-osrm.org/route/v1/driving/` +
+      `${origenCoord.lng},${origenCoord.lat};${destinoCoord.lng},${destinoCoord.lat}` +
+      `?overview=full&geometries=geojson`;
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('No se pudo calcular la ruta (OSRM)');
+    const data = await res.json();
+
+    if (!data.routes || data.routes.length === 0) {
+      throw new Error('No se encontró una ruta por carretera');
+    }
+
+    const ruta = data.routes[0];
+    const coords = ruta.geometry.coordinates.map(c => [c[1], c[0]]);
+
+    return {
+      distanciaMetros: ruta.distance,
+      duracionSegundos: ruta.duration,
+      coords: coords
+    };
+  }
+
+  /* ========== TARIFA ========== */
+  function calcularTarifa(distanciaMetros) {
+    const caidas = Math.floor(distanciaMetros / 80);
+    const tarifaPorDistancia = BANDERAZO + caidas * CAIDA_POR_80M;
+    const base = Math.max(TARIFA_MINIMA, tarifaPorDistancia);
+    return Math.round(base + RECARGO_PLATAFORMA);
+  }
+
+  /* ========== BOTÓN UBICACIÓN ========== */
+  const btnUbicacion = document.getElementById('btnUbicacion');
+  const inputOrigen = document.getElementById('origen');
+
+  btnUbicacion.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      alert('Tu navegador no soporta geolocalización. Escribe tu dirección.');
+      return;
+    }
+    btnUbicacion.disabled = true;
+    btnUbicacion.textContent = '⏳ Obteniendo ubicación...';
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        userLocation = { lat, lng };
+        inputOrigen.value = `GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        btnUbicacion.textContent = '✅ Ubicación capturada';
+        btnUbicacion.disabled = false;
+      },
+      (err) => {
+        let msg = 'No se pudo obtener ubicación. ';
+        if (err.code === 1) msg += 'Permiso denegado.';
+        else if (err.code === 2) msg += 'Ubicación no disponible.';
+        else if (err.code === 3) msg += 'Tiempo agotado.';
+        alert(msg + ' Escribe tu dirección manualmente.');
+        btnUbicacion.textContent = '📍 Usar mi ubicación actual (GPS)';
+        btnUbicacion.disabled = false;
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+
+  /* ========== EXTRAER COORDENADAS ========== */
+  function extraerCoordenadas(texto) {
+    const match = texto.match(/(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+    if (match) return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+    const match2 = texto.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (match2) return { lat: parseFloat(match2[1]), lng: parseFloat(match2[2]) };
+    return null;
+  }
+
+  /* ========== CALCULAR ========== */
+  const inputDestino = document.getElementById('destino');
+  const btnCalcular = document.getElementById('btnCalcular');
+  const resultadoDiv = document.getElementById('resultado');
+  const resDistancia = document.getElementById('resDistancia');
+  const resTiempo = document.getElementById('resTiempo');
+  const resTarifa = document.getElementById('resTarifa');
+  const btnGenerar = document.getElementById('btnGenerar');
+
+  btnCalcular.addEventListener('click', async () => {
+    const origenTexto = inputOrigen.value.trim();
+    const destinoTexto = inputDestino.value.trim();
+
+    if (!origenTexto || !destinoTexto) {
+      alert('Por favor escribe el origen y el destino.');
+      return;
+    }
+
+    btnCalcular.disabled = true;
+    btnCalcular.textContent = '⏳ Calculando ruta real...';
+    resultadoDiv.classList.remove('visible');
+
+    try {
+      let origenCoord;
+      if (userLocation && origenTexto.startsWith('GPS:')) {
+        origenCoord = userLocation;
+      } else {
+        const coordsDirectas = extraerCoordenadas(origenTexto);
+        if (coordsDirectas) {
+          origenCoord = coordsDirectas;
+        } else {
+          origenCoord = await geocodificar(origenTexto);
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 600));
+
+      let destinoCoord;
+      const coordsDestino = extraerCoordenadas(destinoTexto);
+      if (coordsDestino) {
+        destinoCoord = coordsDestino;
+      } else {
+        destinoCoord = await geocodificar(destinoTexto);
+      }
+
+      const ruta = await calcularRutaOSRM(origenCoord, destinoCoord);
+
+      ultimaDistanciaMetros = ruta.distanciaMetros;
+      ultimaDuracionSegundos = ruta.duracionSegundos;
+      ultimaTarifa = calcularTarifa(ruta.distanciaMetros);
+
+      resDistancia.textContent = (ruta.distanciaMetros / 1000).toFixed(1) + ' km';
+      resTiempo.textContent = Math.round(ruta.duracionSegundos / 60) + ' min';
+      resTarifa.textContent = '$' + ultimaTarifa.toLocaleString('es-CO');
+      resultadoDiv.classList.add('visible');
+      btnGenerar.disabled = false;
+
+      dibujarRuta(ruta.coords, origenCoord, destinoCoord);
+      actualizarWhatsApp();
+
+    } catch (err) {
+      console.error(err);
+      alert('No se pudo calcular la ruta.\n\n' + err.message +
+        '\n\nVerifica las direcciones o intenta con coordenadas GPS.');
+    } finally {
+      btnCalcular.disabled = false;
+      btnCalcular.textContent = '📏 Recalcular ruta y tarifa';
+    }
+  });
+
+  /* ========== TICKET ========== */
+  const ticketDiv = document.getElementById('ticket');
+  const btnDescargar = document.getElementById('btnDescargar');
+
+  btnGenerar.addEventListener('click', () => {
+    if (!ultimaTarifa) {
+      alert('Primero calcula la ruta y la tarifa.');
+      return;
+    }
+
+    const now = new Date();
+    const ticketNum = 'TX-' + now.getTime().toString().slice(-6);
+
+    document.getElementById('ticketNum').textContent = ticketNum;
+    document.getElementById('ticketFecha').textContent = now.toLocaleDateString('es-CO');
+    document.getElementById('ticketHora').textContent = now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('ticketOrigen').textContent = inputOrigen.value;
+    document.getElementById('ticketDestino').textContent = inputDestino.value;
+    document.getElementById('ticketDistancia').textContent = (ultimaDistanciaMetros / 1000).toFixed(1) + ' km';
+    document.getElementById('ticketTarifa').textContent = '$' + ultimaTarifa.toLocaleString('es-CO');
+
+    ticketDiv.style.display = 'block';
+    btnDescargar.disabled = false;
+    ticketDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    actualizarWhatsApp(ticketNum);
+  });
+
+  btnDescargar.addEventListener('click', () => {
+    if (typeof html2canvas === 'undefined') {
+      alert('No se pudo cargar la librería de imagen.');
+      return;
+    }
+    btnDescargar.textContent = '⏳ Generando imagen...';
+    btnDescargar.disabled = true;
+
+    html2canvas(ticketDiv, { backgroundColor: '#ffffff', scale: 2, useCORS: true })
+      .then(canvas => {
+        const link = document.createElement('a');
+        link.download = 'ticket-taxi-ibague-' + Date.now() + '.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+        btnDescargar.textContent = '⬇️ Descargar ticket (PNG)';
+        btnDescargar.disabled = false;
+      })
+      .catch(err => {
+        console.error(err);
+        alert('No se pudo generar la imagen.');
+        btnDescargar.textContent = '⬇️ Descargar ticket (PNG)';
+        btnDescargar.disabled = false;
+      });
+  });
+
+  /* ========== WHATSAPP ========== */
+  const btnWhatsApp = document.getElementById('btnWhatsApp');
+
+  function actualizarWhatsApp(ticketNum) {
+    const origen = inputOrigen.value.trim() || '(no especificado)';
+    const destino = inputDestino.value.trim() || '(no especificado)';
+    const distanciaTexto = ultimaDistanciaMetros
+      ? (ultimaDistanciaMetros / 1000).toFixed(1) + ' km'
+      : 'Por calcular';
+    const tarifaTexto = ultimaTarifa
+      ? '$' + ultimaTarifa.toLocaleString('es-CO')
+      : 'Por confirmar';
+
+    let mensaje = `Hola, necesito un taxi en Ibagué 🚖\n\n` +
+      `📍 Origen: ${origen}\n` +
+      `🎯 Destino: ${destino}\n` +
+      `📏 Distancia (ruta): ${distanciaTexto}\n` +
+      `💰 Tarifa estimada: ${tarifaTexto}\n`;
+
+    if (ticketNum) mensaje += `🎫 Ticket N°: ${ticketNum}\n`;
+    mensaje += `\nAdjunto el ticket del servicio.`;
+
+    btnWhatsApp.href = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(mensaje)}`;
+  }
+
+  inputOrigen.addEventListener('input', () => actualizarWhatsApp());
+  inputDestino.addEventListener('input', () => actualizarWhatsApp());
+  actualizarWhatsApp();
+
+  btnWhatsApp.addEventListener('click', (e) => {
+    if (!inputOrigen.value.trim() || !inputDestino.value.trim()) {
+      e.preventDefault();
+      alert('Completa el origen y el destino antes de pedir el taxi.');
+    }
+  });
+
+  /* ========== INICIALIZAR ========== */
+  initMap();
+</script>
