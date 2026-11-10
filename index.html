@@ -1,3 +1,217 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taxi Ibagué — Ruta real, tarifa y ticket</title>
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<!-- html2canvas para el ticket -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background: #f4f6f8; color: #1f2937; line-height: 1.5;
+  }
+  .container { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { text-align: center; padding: 24px 0 8px; }
+  header h1 { font-size: 1.8rem; color: #111827; }
+  header p { color: #4b5563; margin-top: 8px; font-size: 1rem; }
+  .badge {
+    display: inline-block; background: #fef3c7; color: #92400e;
+    font-weight: 700; font-size: 0.85rem; padding: 6px 14px;
+    border-radius: 999px; margin-top: 12px;
+  }
+  .card {
+    background: #fff; border-radius: 16px; padding: 24px;
+    margin-top: 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  }
+  .card h2 { font-size: 1.15rem; margin-bottom: 16px; color: #111827; }
+  label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; color: #374151; }
+  input[type="text"] {
+    width: 100%; padding: 14px 16px; border: 1.5px solid #d1d5db;
+    border-radius: 10px; font-size: 1rem; margin-bottom: 16px;
+    font-family: inherit; transition: border-color 0.2s;
+  }
+  input[type="text"]:focus { outline: none; border-color: #25D366; }
+  .btn-location {
+    background: #eef2f7; color: #1f2937; border: 1.5px dashed #9ca3af;
+    border-radius: 10px; padding: 12px; width: 100%;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    margin-bottom: 12px; transition: background 0.2s;
+  }
+  .btn-location:hover { background: #e2e8f0; }
+  .btn-location:disabled { opacity: 0.6; cursor: wait; }
+  .btn-calcular {
+    width: 100%; background: #1f2937; color: #fff; border: none;
+    border-radius: 10px; padding: 14px; font-size: 1rem;
+    font-weight: 600; cursor: pointer; margin-bottom: 16px;
+    transition: background 0.2s;
+  }
+  .btn-calcular:hover { background: #374151; }
+  .btn-calcular:disabled { opacity: 0.5; cursor: not-allowed; }
+  .resultado {
+    background: #f0fdf4; border: 1.5px solid #25D366;
+    border-radius: 12px; padding: 16px; margin-bottom: 16px; display: none;
+  }
+  .resultado.visible { display: block; }
+  .resultado .fila {
+    display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.95rem;
+  }
+  .resultado .fila.total {
+    border-top: 1px solid #d1fae5; margin-top: 8px;
+    padding-top: 12px; font-weight: 700; font-size: 1.15rem; color: #065f46;
+  }
+  .btn-whatsapp {
+    display: block; width: 100%; background: #25D366; color: #fff;
+    border: none; border-radius: 12px; padding: 16px; font-size: 1.1rem;
+    font-weight: 700; cursor: pointer; text-align: center;
+    text-decoration: none; box-shadow: 0 4px 12px rgba(37,211,102,0.35);
+    transition: transform 0.15s; margin-bottom: 12px;
+  }
+  .btn-whatsapp:hover { transform: translateY(-2px); }
+  .btn-descargar {
+    display: block; width: 100%; background: #1f2937; color: #fff;
+    border: none; border-radius: 12px; padding: 14px; font-size: 1rem;
+    font-weight: 700; cursor: pointer; text-align: center;
+    text-decoration: none; margin-bottom: 12px;
+  }
+  .btn-descargar:disabled { opacity: 0.5; cursor: not-allowed; }
+  .note { font-size: 0.85rem; color: #6b7280; margin-top: 14px; text-align: center; }
+  #map {
+    height: 420px;
+    min-height: 420px;
+    width: 100%;
+    border-radius: 12px;
+    margin-top: 8px;
+    background: #e5e7eb;
+    position: relative;
+    z-index: 1;
+  }
+  .info {
+    background: #eff6ff; border-left: 4px solid #3b82f6;
+    padding: 12px 16px; border-radius: 8px; font-size: 0.9rem;
+    color: #1e3a8a; margin-top: 16px;
+  }
+  #ticket {
+    display: none; background: #ffffff; border: 2px dashed #1f2937;
+    border-radius: 12px; padding: 24px; margin-top: 16px;
+    font-family: 'Courier New', monospace; color: #111827;
+  }
+  #ticket .ticket-header {
+    text-align: center; border-bottom: 2px dashed #9ca3af;
+    padding-bottom: 12px; margin-bottom: 16px;
+  }
+  #ticket .ticket-header h3 { font-size: 1.2rem; margin-bottom: 4px; }
+  #ticket .ticket-header p { font-size: 0.85rem; color: #6b7280; }
+  #ticket .ticket-body { font-size: 0.9rem; }
+  #ticket .ticket-row {
+    display: flex; justify-content: space-between; padding: 4px 0;
+    border-bottom: 1px dotted #e5e7eb;
+  }
+  #ticket .ticket-row:last-child { border-bottom: none; }
+  #ticket .ticket-total {
+    margin-top: 12px; padding-top: 12px; border-top: 2px dashed #9ca3af;
+    display: flex; justify-content: space-between; font-size: 1.1rem; font-weight: 700;
+  }
+  #ticket .ticket-footer {
+    margin-top: 16px; text-align: center; font-size: 0.75rem; color: #6b7280;
+  }
+  footer { text-align: center; font-size: 0.8rem; color: #9ca3af; margin-top: 32px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <h1>🚖 Taxi Ibagué</h1>
+    <p>Calcula tu ruta real, tarifa y genera tu ticket</p>
+    <span class="badge">Carrera mínima oficial: $6.600</span>
+  </header>
+
+  <div class="card">
+    <h2>Datos del servicio</h2>
+
+    <label for="origen">Punto de origen</label>
+    <input type="text" id="origen" placeholder="Ej: Carrera 5 con Calle 37, centro" />
+
+    <button type="button" class="btn-location" id="btnUbicacion">
+      📍 Usar mi ubicación actual (GPS)
+    </button>
+    <p style="font-size:0.8rem;color:#6b7280;margin-top:-8px;margin-bottom:16px;">
+      Si el GPS falla, escribe la dirección o pega un enlace de Google Maps.
+    </p>
+
+    <label for="destino">Destino</label>
+    <input type="text" id="destino" placeholder="Ej: Centro Comercial La Estación" />
+
+    <button type="button" class="btn-calcular" id="btnCalcular">
+      📏 Calcular ruta real y tarifa
+    </button>
+
+    <div class="resultado" id="resultado">
+      <div class="fila"><span>Distancia por carretera</span><span id="resDistancia">—</span></div>
+      <div class="fila"><span>Tiempo estimado</span><span id="resTiempo">—</span></div>
+      <div class="fila total"><span>Tarifa estimada</span><span id="resTarifa">—</span></div>
+    </div>
+
+    <button type="button" class="btn-descargar" id="btnGenerar" disabled>
+      🎫 Generar ticket del servicio
+    </button>
+
+    <a href="#" class="btn-whatsapp" id="btnWhatsApp">
+      💬 Pedir taxi por WhatsApp
+    </a>
+    <p class="note">
+      El ticket se descarga como imagen PNG. Luego puedes adjuntarlo en WhatsApp manualmente.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Mapa de la ruta</h2>
+    <div id="map"></div>
+    <div class="info">
+      <strong>💡 Ruta real:</strong> El mapa muestra el recorrido por carretera (OSRM). La distancia y la tarifa se calculan sobre esa ruta, no en línea recta.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Tu ticket</h2>
+    <div id="ticket">
+      <div class="ticket-header">
+        <h3>🚖 TAXI IBAGUÉ</h3>
+        <p>Ticket de solicitud de servicio</p>
+      </div>
+      <div class="ticket-body">
+        <div class="ticket-row"><span>Ticket N°</span><strong id="ticketNum">—</strong></div>
+        <div class="ticket-row"><span>Fecha</span><span id="ticketFecha">—</span></div>
+        <div class="ticket-row"><span>Hora</span><span id="ticketHora">—</span></div>
+        <div class="ticket-row"><span>Origen</span><span id="ticketOrigen" style="text-align:right;max-width:60%;">—</span></div>
+        <div class="ticket-row"><span>Destino</span><span id="ticketDestino" style="text-align:right;max-width:60%;">—</span></div>
+        <div class="ticket-row"><span>Distancia</span><span id="ticketDistancia">—</span></div>
+        <div class="ticket-total"><span>TOTAL ESTIMADO</span><span id="ticketTarifa">—</span></div>
+      </div>
+      <div class="ticket-footer">
+        WhatsApp: +57 316 527 5176<br>
+        El valor final puede variar según tráfico y esperas.
+      </div>
+    </div>
+    <button type="button" class="btn-descargar" id="btnDescargar" disabled style="margin-top:16px;">
+      ⬇️ Descargar ticket (PNG)
+    </button>
+  </div>
+
+  <footer>Servicio de taxi en Ibagué · WhatsApp: +57 316 527 5176</footer>
+
+</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 <script>
   /* ========== CONFIGURACIÓN ========== */
   const WHATSAPP_NUMBER = "573165275176";
@@ -16,26 +230,30 @@
   let markerOrigen = null;
   let markerDestino = null;
 
-  /* ========== MAPA (fuente de teselas corregida) ========== */
+  /* ========== MAPA ========== */
   function initMap() {
-    // Si ya existe un mapa, destruirlo primero para evitar el error "Map container is already initialized"
-    if (map) {
-      map.remove();
-      map = null;
-    }
+    if (map) { map.remove(); map = null; }
 
-    map = L.map('map').setView(IBAGUE_CENTER, 13);
+    const mapDiv = document.getElementById('map');
+    mapDiv.style.height = '420px';
+    mapDiv.style.minHeight = '420px';
 
-    // ✅ Usar servidor espejo de OSM (más tolerante que tile.openstreetmap.org)
-    // Si sigue fallando, se puede reemplazar por: https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png
-    L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+    map = L.map('map', {
+      center: IBAGUE_CENTER,
+      zoom: 13,
+      zoomControl: true
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap contributors'
+      subdomains: 'abcd',
+      attribution: '© OpenStreetMap contributors © CARTO'
     }).addTo(map);
 
-    // Escuchar errores de carga de teselas
-    map.on('tileerror', function() {
-      console.warn('Error al cargar teselas del mapa');
+    setTimeout(() => { if (map) map.invalidateSize(); }, 200);
+
+    map.on('tileerror', function(e) {
+      console.warn('Error al cargar teselas:', e);
     });
   }
 
@@ -56,6 +274,7 @@
     markerDestino = L.marker(destinoCoord).addTo(map).bindPopup('Destino');
 
     map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+    setTimeout(() => { if (map) map.invalidateSize(); }, 200);
   }
 
   /* ========== GEOCODIFICACIÓN ========== */
@@ -306,5 +525,16 @@
   });
 
   /* ========== INICIALIZAR ========== */
-  initMap();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initMap);
+  } else {
+    initMap();
+  }
+
+  window.addEventListener('resize', () => {
+    if (map) map.invalidateSize();
+  });
 </script>
+
+</body>
+</html>
